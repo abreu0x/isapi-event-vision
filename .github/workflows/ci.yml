@@ -1,0 +1,39 @@
+# CI — isapi-event-vision (quality gate Tier 1).
+# Enxuto por ora: ruff + mypy strict + pytest cov>=80%. CV (OpenCV), respx mock
+# server e atheris no parser entram conforme o repo cresce.
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: ruff + mypy --strict + pytest (cov ≥ 80%)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --frozen --all-extras
+      - name: ruff check
+        run: uv run ruff check .
+      - name: ruff format --check
+        run: uv run ruff format --check .
+      - name: mypy --strict
+        run: uv run mypy
+      - name: pytest + coverage
+        run: uv run pytest
