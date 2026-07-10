@@ -29,6 +29,7 @@ dev = [
   "ruff>=0.9",
   "mypy>=1.14",
   "types-defusedxml>=0.7",
+  "bandit>=1.8",
 ]
 
 # Fuzzing (atheris) fica num dependency-group, não num extra: o CI de PR roda

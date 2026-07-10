@@ -1,0 +1,66 @@
+# =============================================================================
+# Security — CodeQL SAST + pip-audit agendado
+#
+# NÃO duplica o job `security` do ci.yml (que já roda Bandit + Semgrep + pip-audit
+# como gate blocante de PR). Este workflow adiciona o que o ci.yml NÃO cobre:
+#   1. CodeQL — SAST semântico do GitHub (dataflow), roda em PR + schedule semanal.
+#   2. pip-audit agendado — pega CVE novo publicado contra dep que não mudou
+#      (o gate de PR só roda quando o código muda; deps ficam "congeladas" entre PRs).
+#
+# Per-repo adaptation: normalmente nenhuma. CodeQL autodetecta Python.
+# =============================================================================
+
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Semanal, segunda 05:17 UTC — re-scan de CVEs em deps congeladas
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: CodeQL (Python SAST)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          queries: security-extended
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:python"
+
+  pip-audit-scheduled:
+    name: pip-audit (CVE re-scan)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # No schedule já basta; em PR o ci.yml cobre. Mantém aqui pro disparo manual.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-extras
+      - name: pip-audit (falha se CVE conhecido)
+        run: uv run pip-audit --strict
