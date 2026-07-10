@@ -11,6 +11,12 @@ dist/
 build/
 *.egg-info/
 
+# Fuzzing (atheris/libFuzzer) — só o seed corpus curado é versionado
+crash-*
+oom-*
+timeout-*
+leak-*
+
 # Editor / OS
 .vscode/
 *.swp

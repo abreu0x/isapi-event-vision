@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 # Namespace comum nos firmwares Hikvision (nem sempre presente).
 ISAPI_NS = "{http://www.hikvision.com/ver20/XMLSchema}"
@@ -69,9 +69,14 @@ def parse_alert(xml_bytes: bytes) -> AlertEvent:
     except ValueError as exc:
         raise AlertParseError(f"channelID não numérico: {channel!r}") from exc
 
-    return AlertEvent(
-        event_type=event_type,
-        channel_id=channel_id,
-        event_state=find("eventState") or "active",
-        date_time=find("dateTime"),
-    )
+    try:
+        return AlertEvent(
+            event_type=event_type,
+            channel_id=channel_id,
+            event_state=find("eventState") or "active",
+            date_time=find("dateTime"),
+        )
+    except ValidationError as exc:
+        # Normaliza violações de invariante (ex.: channelID negativo) para o
+        # erro do contrato; parse_alert nunca vaza ValidationError do pydantic.
+        raise AlertParseError(f"campos fora do contrato: {exc}") from exc

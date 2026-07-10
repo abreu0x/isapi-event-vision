@@ -29,6 +29,12 @@ dev = [
   "mypy>=1.14",
 ]
 
+# Fuzzing (atheris) fica num dependency-group, não num extra: o CI de PR roda
+# `uv sync --all-extras` (não puxa groups), então atheris só entra no nightly
+# via `uv sync --group fuzz`. atheris tem wheel só p/ Linux.
+[dependency-groups]
+fuzz = ["atheris>=3.0"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

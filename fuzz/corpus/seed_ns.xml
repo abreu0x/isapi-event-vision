@@ -1,0 +1,1 @@
+<EventNotificationAlert xmlns="http://www.hikvision.com/ver20/XMLSchema"><channelID>1</channelID><eventType>VMD</eventType><eventState>active</eventState><dateTime>2026-07-09T12:00:00-03:00</dateTime></EventNotificationAlert>

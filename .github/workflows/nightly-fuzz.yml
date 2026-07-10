@@ -1,0 +1,34 @@
+# Nightly — fuzzing atheris do parser ISAPI (time-bound, fora do CI de PR).
+# Falha o job se o fuzzer achar um input que viola o contrato de parse_alert.
+name: nightly-fuzz
+
+on:
+  schedule:
+    - cron: "37 4 * * *" # todo dia ~04:37 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-parser:
+    name: atheris parse_alert (120s)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --frozen --all-extras --group fuzz
+      - name: fuzz (120s, seed corpus)
+        run: uv run python fuzz/fuzz_parser.py -max_total_time=120 -max_len=512 fuzz/corpus
+      - name: upload crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: crash-*
+          if-no-files-found: ignore
