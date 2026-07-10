@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 
 import httpx
@@ -51,9 +52,22 @@ def test_extract_boundary_quoted_and_unquoted() -> None:
     assert _extract_boundary('multipart/mixed; boundary="abc"') == "abc"
 
 
+def test_extract_boundary_param_name_is_case_insensitive() -> None:
+    # Nome do parâmetro é case-insensitive (RFC 2045); valor com '=' preservado.
+    assert _extract_boundary("multipart/mixed; Boundary=abc") == "abc"
+    assert _extract_boundary("multipart/mixed; BOUNDARY=ab=cd") == "ab=cd"
+
+
 def test_extract_boundary_missing_raises() -> None:
     with pytest.raises(AlarmStreamError):
         _extract_boundary("text/plain")
+
+
+async def test_iter_parts_aborts_oversized_open_part() -> None:
+    # Parte aberta que nunca fecha e passa do teto → aborta (não bufferiza sem fim).
+    huge = b"--boundary\r\n\r\n" + b"A" * 500
+    with pytest.raises(AlarmStreamError, match="excede"):
+        [p async for p in _iter_parts(_agen(huge), BOUNDARY, max_part_bytes=64)]
 
 
 # --- _iter_parts (splitter incremental, puro) --------------------------------
@@ -98,6 +112,26 @@ async def test_stream_events_parses_multipart() -> None:
 
     assert [e.event_type for e in events] == ["VMD", "linedetection"]
     assert [e.channel_id for e in events] == [1, 3]
+
+
+@respx.mock
+async def test_stream_events_skips_invalid_part_and_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Uma parte-lixo no meio não pode derrubar o stream: emite as boas, loga a ruim.
+    respx.get(STREAM_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"Content-Type": f"multipart/mixed; boundary={BOUNDARY}"},
+            content=_multipart_body(ALERT_A, b"<not-well-formed", ALERT_B),
+        )
+    )
+    with caplog.at_level(logging.WARNING):
+        async with AlarmStreamClient(BASE_URL, "admin", "secret") as client:
+            events = [ev async for ev in client.stream_events()]
+
+    assert [e.event_type for e in events] == ["VMD", "linedetection"]
+    assert "descartando parte inválida" in caplog.text
 
 
 @respx.mock

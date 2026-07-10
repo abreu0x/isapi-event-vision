@@ -10,14 +10,28 @@ sem câmera.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from types import TracebackType
 
 import httpx
 
-from isapi_event_vision.parser import AlertEvent, parse_alert
+from isapi_event_vision.parser import (
+    AlertEvent,
+    AlertParseError,
+    parse_alert,
+    strip_part_headers,
+)
+
+logger = logging.getLogger(__name__)
 
 ALERT_STREAM_PATH = "/ISAPI/Event/notification/alertStream"
+
+# Teto de uma única parte ainda não fechada. Eventos ISAPI são pequenos (poucos
+# KB); uma parte que cresce além disso sem boundary de fecho indica corpo
+# malformado ou câmera hostil tentando exaurir memória — abortamos em vez de
+# bufferizar sem limite.
+MAX_PART_BYTES = 1 << 20  # 1 MiB
 
 
 class AlarmStreamError(RuntimeError):
@@ -25,50 +39,58 @@ class AlarmStreamError(RuntimeError):
 
 
 def _extract_boundary(content_type: str) -> str:
-    """Extrai o token de boundary de `multipart/mixed; boundary=...`."""
+    """Extrai o token de boundary de `multipart/mixed; boundary=...`.
+
+    O nome do parâmetro é case-insensitive (RFC 2045); o valor não. Um `=` no
+    valor (comum em boundaries base64) é preservado.
+    """
     for token in content_type.split(";"):
-        token = token.strip()
-        if token.startswith("boundary="):
-            boundary = token[len("boundary=") :].strip('"')
+        name, sep, value = token.strip().partition("=")
+        if sep and name.lower() == "boundary":
+            boundary = value.strip().strip('"')
             if boundary:
                 return boundary
     raise AlarmStreamError(f"Content-Type sem boundary utilizável: {content_type!r}")
 
 
-def _strip_part_headers(segment: bytes) -> bytes:
-    """Remove os headers MIME de uma parte, devolvendo só o payload (ou vazio)."""
-    chunk = segment.strip()
-    if not chunk or chunk == b"--":
-        return b""
-    for sep in (b"\r\n\r\n", b"\n\n"):
-        if sep in chunk:
-            return chunk.split(sep, 1)[1].strip()
-    return chunk
-
-
-async def _iter_parts(chunks: AsyncIterator[bytes], boundary: str) -> AsyncIterator[bytes]:
+async def _iter_parts(
+    chunks: AsyncIterator[bytes],
+    boundary: str,
+    *,
+    max_part_bytes: int = MAX_PART_BYTES,
+) -> AsyncIterator[bytes]:
     """Reagrupa um fluxo de bytes multipart nos payloads XML, um a um.
 
-    Só emite uma parte quando o boundary seguinte já chegou (a parte está fechada),
-    então funciona tanto para um corpo finito quanto para um stream infinito.
+    Só emite uma parte quando o boundary seguinte já chegou (a parte está
+    fechada), então funciona para corpo finito e stream infinito. O buffer
+    retém apenas a parte ainda aberta; se ela passar de `max_part_bytes` sem
+    fechar, aborta (proteção contra memória ilimitada com input não-confiável).
     """
     delimiter = b"--" + boundary.encode()
+    dlen = len(delimiter)
     buffer = b""
     async for chunk in chunks:
         buffer += chunk
-        while True:
-            start = buffer.find(delimiter)
-            if start == -1:
-                break
-            nxt = buffer.find(delimiter, start + len(delimiter))
+        pos = buffer.find(delimiter)
+        while pos != -1:
+            nxt = buffer.find(delimiter, pos + dlen)
             if nxt == -1:
-                # Parte ainda aberta: descarta o preâmbulo e espera mais bytes.
-                buffer = buffer[start:]
                 break
-            payload = _strip_part_headers(buffer[start + len(delimiter) : nxt])
-            buffer = buffer[nxt:]
+            payload = strip_part_headers(buffer[pos + dlen : nxt])
             if payload:
                 yield payload
+            pos = nxt
+        if pos != -1:
+            # Descarta preâmbulo/partes já emitidas; mantém a parte aberta.
+            buffer = buffer[pos:]
+        elif len(buffer) >= dlen:
+            # Sem delimiter: retém só o bastante p/ um delimiter partido entre
+            # chunks; o resto é preâmbulo descartável.
+            buffer = buffer[-(dlen - 1) :] if dlen > 1 else b""
+        if len(buffer) > max_part_bytes:
+            raise AlarmStreamError(
+                f"parte do alarm stream excede {max_part_bytes} bytes sem boundary de fecho"
+            )
 
 
 class AlarmStreamClient:
@@ -116,4 +138,12 @@ class AlarmStreamClient:
             response.raise_for_status()
             boundary = _extract_boundary(response.headers.get("content-type", ""))
             async for payload in _iter_parts(response.aiter_bytes(), boundary):
-                yield parse_alert(payload)
+                # Uma parte inválida (malformada ou ataque de entidade barrado
+                # pelo defusedxml) não pode derrubar o stream inteiro: loga e
+                # segue. Erro nunca em silêncio (warning), nunca fatal.
+                try:
+                    event = parse_alert(payload)
+                except AlertParseError as exc:
+                    logger.warning("alarm stream: descartando parte inválida (%s)", exc)
+                    continue
+                yield event

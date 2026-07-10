@@ -30,20 +30,30 @@ class AlertParseError(ValueError):
     """XML inválido ou campos obrigatórios ausentes."""
 
 
+def strip_part_headers(segment: bytes) -> bytes:
+    """Remove os headers MIME de uma parte multipart, devolvendo só o payload.
+
+    Devolve `b""` para preâmbulo/epílogo vazio ou o marcador de fecho `--`.
+    Compartilhado entre o splitter finito (`split_multipart`) e o incremental
+    do cliente, para a lógica de fronteira viver num lugar só.
+    """
+    chunk = segment.strip()
+    if not chunk or chunk == b"--":
+        return b""
+    for sep in (b"\r\n\r\n", b"\n\n"):
+        if sep in chunk:
+            return chunk.split(sep, 1)[1].strip()
+    return chunk
+
+
 def split_multipart(body: bytes, boundary: str) -> list[bytes]:
     """Quebra um corpo multipart/mixed nos payloads XML (headers removidos)."""
     delimiter = b"--" + boundary.encode()
     parts: list[bytes] = []
     for raw in body.split(delimiter):
-        chunk = raw.strip()
-        if not chunk or chunk == b"--":
-            continue
-        # Separa headers do payload pela linha em branco.
-        for sep in (b"\r\n\r\n", b"\n\n"):
-            if sep in chunk:
-                chunk = chunk.split(sep, 1)[1]
-                break
-        parts.append(chunk.strip())
+        payload = strip_part_headers(raw)
+        if payload:
+            parts.append(payload)
     return parts
 
 
