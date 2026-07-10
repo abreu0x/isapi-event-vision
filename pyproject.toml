@@ -16,12 +16,15 @@ classifiers = [
 ]
 dependencies = [
   "pydantic>=2.13",
+  "httpx>=0.28",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=9.0.3",
   "pytest-cov>=6.0",
+  "pytest-asyncio>=0.25",
+  "respx>=0.22",
   "ruff>=0.9",
   "mypy>=1.14",
 ]
@@ -48,3 +51,4 @@ files = ["src", "tests"]
 addopts = "--cov=isapi_event_vision --cov-report=term-missing --cov-fail-under=80"
 testpaths = ["tests"]
 pythonpath = ["src"]
+asyncio_mode = "auto"
