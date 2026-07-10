@@ -17,7 +17,24 @@ NEGATIVE_CHANNEL = (
     b"<channelID>-1</channelID></EventNotificationAlert>"
 )
 
+# Billion laughs: expansão de entidade. O alarm stream vem de câmera (input
+# não-confiável); defusedxml deve barrar e virar AlertParseError, sem expandir.
+BILLION_LAUGHS = (
+    b'<?xml version="1.0"?>\n'
+    b'<!DOCTYPE lolz [<!ENTITY lol "lol">'
+    b'<!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;">'
+    b'<!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;">]>\n'
+    b"<EventNotificationAlert><eventType>&lol3;</eventType>"
+    b"<channelID>1</channelID></EventNotificationAlert>"
+)
+
 
 def test_negative_channel_raises_parse_error_not_validation_error() -> None:
     with pytest.raises(AlertParseError):
         parse_alert(NEGATIVE_CHANNEL)
+
+
+def test_entity_expansion_attack_is_blocked() -> None:
+    # Não pode expandir a entidade nem vazar EntitiesForbidden: vira AlertParseError.
+    with pytest.raises(AlertParseError):
+        parse_alert(BILLION_LAUGHS)

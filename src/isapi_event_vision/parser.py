@@ -9,8 +9,8 @@ natural de fuzzing (atheris) nas próximas etapas.
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
-
+import defusedxml.ElementTree as ET
+from defusedxml.common import DefusedXmlException
 from pydantic import BaseModel, Field, ValidationError
 
 # Namespace comum nos firmwares Hikvision (nem sempre presente).
@@ -49,10 +49,12 @@ def split_multipart(body: bytes, boundary: str) -> list[bytes]:
 
 def parse_alert(xml_bytes: bytes) -> AlertEvent:
     """Parseia um `<EventNotificationAlert>` para `AlertEvent`."""
+    # defusedxml barra DTD/entidades (billion laughs, XXE) — o alarm stream vem
+    # de uma câmera, input não-confiável; ataque de entidade vira AlertParseError.
     try:
         root = ET.fromstring(xml_bytes)
-    except ET.ParseError as exc:
-        raise AlertParseError(f"XML inválido: {exc}") from exc
+    except (ET.ParseError, DefusedXmlException) as exc:
+        raise AlertParseError(f"XML inválido ou inseguro: {exc}") from exc
 
     def find(tag: str) -> str | None:
         el = root.find(f"{ISAPI_NS}{tag}")
